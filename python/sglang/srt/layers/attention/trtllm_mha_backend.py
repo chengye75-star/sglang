@@ -1412,8 +1412,6 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
             kwargs = {}
             if q_len_per_req != 1:
                 kwargs["q_len_per_req"] = q_len_per_req
-            if mask is not None:
-                kwargs["mask"] = mask[: group_seq_lens.shape[0]]
             return flashinfer.decode.trtllm_batch_decode_with_kv_cache(
                 query=group_query,
                 kv_cache=kv_cache,
