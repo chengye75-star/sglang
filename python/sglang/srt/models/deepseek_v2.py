@@ -2615,6 +2615,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         prefix: str = "",
         alt_stream: Optional[torch.cuda.Stream] = None,
         skip_rope: bool = False,
+        build_stages: bool = True,
     ) -> None:
         super().__init__()
         self.hidden_size = config.hidden_size
@@ -2710,11 +2711,13 @@ class DeepseekV2DecoderLayer(nn.Module):
 
         self._gfx95_quant_format = self._detect_gfx95_quant_format()
 
-        self.attn_boundary, self.ffn_boundary = self._build_stages(
-            input_layernorm=self.input_layernorm,
-            post_attention_layernorm=self.post_attention_layernorm,
-            qkv_latent_func=self.self_attn.prepare_qkv_latent,
-        )
+        # A subclass that brings its own norms builds the stages after them.
+        if build_stages:
+            self.attn_boundary, self.ffn_boundary = self._build_stages(
+                input_layernorm=self.input_layernorm,
+                post_attention_layernorm=self.post_attention_layernorm,
+                qkv_latent_func=self.self_attn.prepare_qkv_latent,
+            )
 
     def _build_stages(
         self,
