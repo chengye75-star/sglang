@@ -176,6 +176,8 @@ class TestTRTLLMMHANVFP4SpecExtend(CustomTestCase):
         backend = TRTLLMHAAttnBackend.__new__(TRTLLMHAAttnBackend)
         backend.decode_uses_native_fp4 = True
         backend.is_nvfp4_kvcache = True
+        backend.prefill_uses_native_fp4 = False
+        backend.uses_trtllm_gen_native_fp4 = False
         backend.is_xqa_impl = False
         backend.use_fmha_v2 = False
         backend.data_type = torch.uint8
@@ -268,7 +270,7 @@ class TestTRTLLMMHANVFP4SpecExtend(CustomTestCase):
                     out_cache_loc=torch.arange(6),
                 )
                 with patch(
-                    "sglang.srt.layers.attention.trtllm_mha_backend.is_cp_v2_active",
+                    "sglang.srt.layers.attention.trtllm_mha_backend.is_cp_active",
                     return_value=False,
                 ):
                     output = backend.forward_extend(q, k, v, layer, batch)
@@ -308,7 +310,7 @@ class TestTRTLLMMHANVFP4SpecExtend(CustomTestCase):
         self.assertTrue(backend._uses_spec_decode_kernel(batch))
         q = torch.randn(6, 8)
         with patch(
-            "sglang.srt.layers.attention.trtllm_mha_backend.is_cp_v2_active",
+            "sglang.srt.layers.attention.trtllm_mha_backend.is_cp_active",
             return_value=False,
         ):
             output = backend.forward_extend(q, q, q, layer, batch)
@@ -358,7 +360,7 @@ class TestTRTLLMMHANVFP4SpecExtend(CustomTestCase):
         )
         with (
             patch(
-                "sglang.srt.layers.attention.trtllm_mha_backend.is_cp_v2_active",
+                "sglang.srt.layers.attention.trtllm_mha_backend.is_cp_active",
                 return_value=False,
             ),
             patch(
@@ -414,7 +416,7 @@ class TestTRTLLMMHANVFP4SpecExtend(CustomTestCase):
         )
         with (
             patch(
-                "sglang.srt.layers.attention.trtllm_mha_backend.is_cp_v2_active",
+                "sglang.srt.layers.attention.trtllm_mha_backend.is_cp_active",
                 return_value=False,
             ),
             patch(

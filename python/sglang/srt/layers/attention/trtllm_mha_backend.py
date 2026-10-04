@@ -1739,7 +1739,7 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
         is_decode_mode = self._uses_spec_decode_kernel(forward_batch)
         if (
             self.decode_uses_native_fp4
-            and not self.prefill_uses_native_fp4
+            and not getattr(self, "prefill_uses_native_fp4", False)
             and not is_decode_mode
         ):
             raise RuntimeError(
@@ -1809,9 +1809,11 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
         else:
             q = q.reshape(-1, layer.tp_q_head_num, layer.head_dim)
 
-        if uses_native_fp4:
+        native_fp4_kv = uses_native_fp4 or (
+            self.is_nvfp4_kvcache and is_decode_mode
+        )
+        if native_fp4_kv:
             kv_cache, kv_cache_block_scales = self._get_nvfp4_decode_kv_cache(layer)
-            k_cache, v_cache = kv_cache
         else:
             # Native pool format is NHD:
             # [num_pages, page_size, num_kv_heads, head_dim].
@@ -1835,7 +1837,7 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
             kv_cache_block_scales = None
         # sink: additional value per head in the denominator of the softmax.
         attention_sink = kwargs.get("sinks", None)
-        if uses_native_fp4:
+        if native_fp4_kv:
             k_scale, v_scale = self._get_nvfp4_bmm_scales(layer)
             bmm1_scale = q_scale * k_scale * layer.scaling
             bmm2_scale = v_scale
@@ -1892,22 +1894,13 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
                     bmm2_scale=bmm2_scale,
                     window_left=layer.sliding_window_size,
                     sinks=attention_sink,
-                    skip_softmax_threshold_scale_factor=envs.SGLANG_SKIP_SOFTMAX_DECODE_THRESHOLD_SCALE_FACTOR.get(),
-                    out=native_out,
-                    out_dtype=(None if uses_native_fp4 else self.q_data_type),
-                    q_len_per_req=None,
                     max_q_len=self.forward_metadata.max_seq_len_q,
                     cu_seqlens_q=self.forward_metadata.cu_seqlens_q,
                     mask=self.forward_metadata.xqa_mask,
                     kv_cache_sf=kv_cache_block_scales,
                 )
             else:
-                mask = (
-                    self.forward_metadata.xqa_mask
-                    if forward_batch.forward_mode.is_target_verify()
-                    and self.forward_metadata.max_seq_len_q > 1
-                    else None
-                )
+                mask = self.forward_metadata.xqa_mask
                 o = self._run_fixed_q_len_decode(
                     q,
                     kv_cache,
@@ -1926,6 +1919,8 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
         elif self.use_fmha_v2 and not cp_active:
             # CP must go through cp_strategy.run_attention (per-shard
             # masking); the plain-causal fmha_v2 call below would be wrong.
+            if native_fp4_kv:
+                k_cache, v_cache = kv_cache
             paged_kv = torch.stack([k_cache, v_cache], dim=1)
             o = flashinfer.prefill.trtllm_fmha_v2_prefill(
                 (q, paged_kv),
