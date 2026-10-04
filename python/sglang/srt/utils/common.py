@@ -1554,17 +1554,53 @@ def make_pp_layers(
     """Make this pipeline stage's layers, and return them with the stage's range.
 
     Layers outside ``[start_layer, end_layer)`` are ``PPMissingLayer`` stand-ins.
+    The local layers are built inside one layer stack, so layers that declare
+    stage boundaries connect in order without naming their neighbours. Across
+    a pipeline stage boundary the stack learns the neighbouring stage from the
+    layer itself, built again here on the meta device.
     """
+    # circular imports
+    from sglang.srt.distributed import get_pp_indices
+    from sglang.srt.layers.layer_boundary.factories import layer_stack
+
     parallel = get_parallel()
-    return make_layers(
-        num_hidden_layers,
-        layer_fn,
-        pp_rank=parallel.pp_rank,
-        pp_size=parallel.pp_size,
-        prefix=prefix,
-        return_tuple=return_tuple,
-        offloader_kwargs=offloader_kwargs,
+    start_layer, end_layer = get_pp_indices(
+        num_hidden_layers, parallel.pp_rank, parallel.pp_size
     )
+
+    def neighbour(idx):
+        return functools.partial(
+            _build_neighbour_layer, layer_fn, idx, add_prefix(idx, prefix)
+        )
+
+    with layer_stack(
+        previous_layers=[neighbour(idx) for idx in reversed(range(start_layer))],
+        next_layers=[neighbour(idx) for idx in range(end_layer, num_hidden_layers)],
+    ):
+        return make_layers(
+            num_hidden_layers,
+            layer_fn,
+            pp_rank=parallel.pp_rank,
+            pp_size=parallel.pp_size,
+            prefix=prefix,
+            return_tuple=return_tuple,
+            offloader_kwargs=offloader_kwargs,
+        )
+
+
+def _build_neighbour_layer(layer_fn: LayerFn, idx: int, prefix: str) -> None:
+    """Build a layer another pipeline stage holds, only for the stage
+    boundaries it declares. On the meta device nothing is allocated; RoPE
+    modules it adds to the shared cache are meta too, so they are dropped."""
+    from sglang.srt.layers.rotary_embedding.factory import _ROPE_DICT
+
+    cached = set(_ROPE_DICT)
+    try:
+        with torch.device("meta"):
+            layer_fn(idx=idx, prefix=prefix)
+    finally:
+        for key in set(_ROPE_DICT) - cached:
+            del _ROPE_DICT[key]
 
 
 def set_random_seed(seed: int) -> None:
