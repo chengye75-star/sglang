@@ -215,7 +215,8 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
 
         # 2. Initialize KT wrapper for CPU experts
         # CPU experts: num_gpu_experts to num_experts-1
-        if self.tp_rank == 0:
+        # A layer built on the meta device never runs, so it starts no engine.
+        if self.tp_rank == 0 and torch.get_default_device().type != "meta":
             self.wrapper = KTMoEWrapper(
                 layer_idx=self.kt_config.layer_idx,
                 num_experts=num_experts,
