@@ -29,7 +29,7 @@ _SUMS = {
     "moe_finalize_all_reduce_mhc",
 }
 _BUILDS_STAGES = (
-    "make_stages(",
+    "append_stages(",
     "declare_attn(",
     "declare_ffn(",
     "_build_stages(",
