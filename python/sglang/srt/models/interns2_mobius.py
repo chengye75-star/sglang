@@ -16,9 +16,10 @@ from sglang.srt.layers.aux_hidden_states import (
 )
 from sglang.srt.layers.dp_attention import is_dp_attention_enabled
 from sglang.srt.layers.layer_boundary import (
+    append_stages,
     declare_attn,
     declare_ffn,
-    make_stages,
+    layer_stack,
 )
 from sglang.srt.layers.layer_boundary.residual import batch as residual_batch
 from sglang.srt.layers.layer_boundary.residual.add_norm import (
@@ -485,7 +486,7 @@ class InternS2MobiusLinearDecoderLayer(_InternS2MobiusDecoderMixin, nn.Module):
             config.hidden_size, eps=config.rms_norm_eps
         )
         accepts_fp8_input = _linear_accepts_fp8_tuple(self.linear_attn.in_proj_qkvz)
-        self.attn_boundary, self.ffn_boundary = make_stages(
+        self.attn_boundary, self.ffn_boundary = append_stages(
             (
                 declare_attn(
                     read=NormQuantReadout(
@@ -501,10 +502,6 @@ class InternS2MobiusLinearDecoderLayer(_InternS2MobiusDecoderMixin, nn.Module):
                 ),
                 self.post_attention_layernorm,
             ),
-            previous=declare_ffn(sparse=True, next_layer_sparse=True)
-            if layer_id != 0
-            else None,
-            terminal=layer_id == config.num_hidden_layers - 1,
         )
 
     def forward(
@@ -617,7 +614,7 @@ class InternS2MobiusAttentionDecoderLayer(
         self.q_norm = GemmaRMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = GemmaRMSNorm(self.head_dim, eps=config.rms_norm_eps)
         accepts_fp8_input = _linear_accepts_fp8_tuple(self.qkv_proj)
-        self.attn_boundary, self.ffn_boundary = make_stages(
+        self.attn_boundary, self.ffn_boundary = append_stages(
             (
                 declare_attn(
                     read=NormQuantReadout(
@@ -633,10 +630,6 @@ class InternS2MobiusAttentionDecoderLayer(
                 ),
                 self.post_attention_layernorm,
             ),
-            previous=declare_ffn(sparse=True, next_layer_sparse=True)
-            if layer_id != 0
-            else None,
-            terminal=layer_id == config.num_hidden_layers - 1,
         )
         self.alt_stream = alt_stream
 
@@ -725,13 +718,14 @@ class InternS2MobiusForCausalLM(Qwen3_5ForCausalLM):
                 )
             raise ValueError(f"Unsupported Mobius layer type: {checkpoint_type}")
 
-        self.layers, self._start_layer, self._end_layer = make_layers(
-            config.num_hidden_layers,
-            get_layer,
-            pp_rank=0,
-            pp_size=1,
-            prefix=f"{prefix}.layers",
-        )
+        with layer_stack():
+            self.layers, self._start_layer, self._end_layer = make_layers(
+                config.num_hidden_layers,
+                get_layer,
+                pp_rank=0,
+                pp_size=1,
+                prefix=f"{prefix}.layers",
+            )
         self.norm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.layers_to_capture = []
 

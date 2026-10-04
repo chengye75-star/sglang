@@ -10,9 +10,10 @@ from triton.language.extra import libdevice
 
 from sglang.srt.layers.activation import SiluAndMul
 from sglang.srt.layers.layer_boundary import (
+    append_stages,
     declare_attn,
     declare_ffn,
-    make_stages,
+    layer_stack,
 )
 from sglang.srt.layers.layer_boundary.output import OutputTransform
 from sglang.srt.layers.layer_boundary.residual import batch as residual_batch
@@ -487,7 +488,7 @@ class IQuestQ1DecoderLayer(nn.Module):
         # Intentional: layer 0 adds the raw input and an FFN output norm, later layers
         # add the normalized input without one; the MTP draft follows layer 0.
         moe = _is_moe_layer(config, layer_id)
-        self.attn_boundary, self.ffn_boundary = make_stages(
+        self.attn_boundary, self.ffn_boundary = append_stages(
             (
                 declare_attn(
                     read=UNFUSED_NORM_READOUT
@@ -506,12 +507,6 @@ class IQuestQ1DecoderLayer(nn.Module):
                 ),
                 self.feed_forward_norm,
             ),
-            previous=declare_ffn(
-                sparse=_is_moe_layer(config, layer_id - 1), next_layer_sparse=moe
-            )
-            if layer_id != 0
-            else None,
-            terminal=layer_id == config.num_hidden_layers - 1,
         )
 
     def _attn_output(self, attn_output: torch.Tensor) -> torch.Tensor:
@@ -550,16 +545,17 @@ class IQuestQ1Model(nn.Module):
             config.hidden_size,
             prefix=add_prefix("embed_tokens", prefix),
         )
-        self.layers = make_layers(
-            config.num_hidden_layers,
-            lambda idx, prefix: IQuestQ1DecoderLayer(
-                config=config,
-                layer_id=idx,
-                quant_config=quant_config,
-                prefix=prefix,
-            ),
-            prefix=add_prefix("layers", prefix),
-        )
+        with layer_stack():
+            self.layers = make_layers(
+                config.num_hidden_layers,
+                lambda idx, prefix: IQuestQ1DecoderLayer(
+                    config=config,
+                    layer_id=idx,
+                    quant_config=quant_config,
+                    prefix=prefix,
+                ),
+                prefix=add_prefix("layers", prefix),
+            )
         self.norm = IQuestQ1RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(

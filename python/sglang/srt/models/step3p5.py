@@ -11,9 +11,9 @@ from sglang.srt.layers.dp_attention import (
     is_dp_attention_enabled,
 )
 from sglang.srt.layers.layer_boundary import (
+    append_stages,
     declare_attn,
     declare_ffn,
-    make_stages,
 )
 from sglang.srt.layers.layer_boundary.residual import batch as residual_batch
 from sglang.srt.layers.layernorm import GemmaRMSNorm
@@ -426,7 +426,6 @@ class Step3p5DecoderLayer(nn.Module):
         self.num_attention_heads = config.num_attention_heads
         self.num_key_value_heads = config.num_attention_groups
         self.is_moe_layer = layer_id in moe_layers_set
-        self.is_previous_layer_sparse = (layer_id - 1) in moe_layers_set
         self.is_next_layer_sparse = (layer_id + 1) in moe_layers_set
         num_hidden_layers = config.num_hidden_layers
 
@@ -522,7 +521,7 @@ class Step3p5DecoderLayer(nn.Module):
 
         # An MTP draft is a one-layer model; layer_id still indexes its config.
 
-        self.attn_boundary, self.ffn_boundary = make_stages(
+        self.attn_boundary, self.ffn_boundary = append_stages(
             (declare_attn(), self.input_layernorm),
             (
                 declare_ffn(
@@ -531,14 +530,6 @@ class Step3p5DecoderLayer(nn.Module):
                 ),
                 self.post_attention_layernorm,
             ),
-            previous=declare_ffn(
-                sparse=self.is_previous_layer_sparse,
-                next_layer_sparse=self.is_moe_layer,
-            )
-            if not (0 if is_nextn else layer_id) == 0
-            else None,
-            terminal=(0 if is_nextn else layer_id)
-            == (1 if is_nextn else config.num_hidden_layers) - 1,
         )
 
         self.layer_id = layer_id

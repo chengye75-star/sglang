@@ -29,6 +29,7 @@ from transformers import MixtralConfig
 from sglang.srt.distributed import (
     tensor_model_parallel_all_reduce,
 )
+from sglang.srt.layers.layer_boundary import layer_stack
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.linear import (
     QKVParallelLinear,
@@ -324,17 +325,18 @@ class MixtralModel(nn.Module):
             config.hidden_size,
             prefix=add_prefix("embed_tokens", prefix),
         )
-        self.layers = nn.ModuleList(
-            [
-                MixtralDecoderLayer(
-                    config,
-                    i,
-                    quant_config=quant_config,
-                    prefix=add_prefix(f"layers.{i}", prefix),
-                )
-                for i in range(config.num_hidden_layers)
-            ]
-        )
+        with layer_stack():
+            self.layers = nn.ModuleList(
+                [
+                    MixtralDecoderLayer(
+                        config,
+                        i,
+                        quant_config=quant_config,
+                        prefix=add_prefix(f"layers.{i}", prefix),
+                    )
+                    for i in range(config.num_hidden_layers)
+                ]
+            )
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
