@@ -1,0 +1,22 @@
+--- a/flashinfer/xqa.py
++++ b/flashinfer/xqa.py
+@@ -51,6 +51,19 @@
+     # Ragged Q must reuse the uniform module unless it changes the compile
+     # flags; a second cache entry would re-register the same torch op.
+     use_ragged_q = use_ragged_q and ragged_q_changes_build(q_seq_len, head_group_ratio)
++    # [G40 local patch: q-fold] When q_seq_len does not enter the compile
++    # flags (q*hgr>32 -> no -DSPEC_Q_SEQ_LEN), every q builds a byte-identical
++    # module — only the cache-key name differs.  SGLang's NEXTN draft-extend
++    # path routes the runtime max-q (unbounded: 1061, 2048, ...) through this
++    # key, making the JIT cache unbounded and forcing nvcc compilation on the
++    # request path (2026-10-04 19:57: such a JIT segfaulted and killed the
++    # scheduler).  Fold all ineligible q onto the first ineligible value so
++    # exactly one module covers them; the real q still flows to the kernel as
++    # a runtime argument (mha.cu consumes qSeqLen at runtime; the
++    # SPEC_Q_SEQ_LEN macro is only used by mha_sm90.cu, not compiled here).
++    _fold = 32 // head_group_ratio + 1  # smallest q that is NOT swap-AB-eligible
++    if q_seq_len > _fold > 1:
++        q_seq_len = _fold
+     return _get_xqa_module_cached(
+         input_dtype,
+         kv_cache_dtype,
