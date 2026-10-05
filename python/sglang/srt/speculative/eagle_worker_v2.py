@@ -214,6 +214,16 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         # Alias for better readability
         self.draft_runner = self.draft_worker.model_runner
         self._init_dsa_index_share_state()
+        # [embed-share-early] Bind target embed/lm_head NOW, before the
+        # scheduler profiles the KV pool. The draft model class allocates an
+        # embedding + lm_head shell (~1.9 GB/GPU for Qwen3.8 vocab 248K) that
+        # set_embed_and_head frees via del + empty_cache. In stock 0.5.21 that
+        # runs only in alloc_memory_pool(), i.e. AFTER init_target_memory_pool
+        # sized the pool against the shell-inflated footprint, so the pool
+        # collapses even though the memory is reclaimable. Idempotent:
+        # alloc_memory_pool still re-runs init_token_map/init_lm_head.
+        self.init_token_map()
+        self.init_lm_head()
         # Eager draft-extend seed buffer (graph paths use their own static ones).
         self.dsa_extend_topk_buf: Optional[torch.Tensor] = None
         self.draft_tp_context = (
