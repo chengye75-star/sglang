@@ -22,6 +22,7 @@ from functools import lru_cache, partial
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
+import os
 import torch
 import torch.nn as nn
 from einops import rearrange
@@ -1476,7 +1477,41 @@ class Qwen3VLForConditionalGeneration(nn.Module):
             items, range(len(items)), preserve_for_reprefill=True
         )
         assert pixel_values.dim() == 2, pixel_values.dim()
-        visual_features = self.visual(pixel_values, grid_thw=grid_thw)
+        # [VIT-CHUNK] Whole-item chunking is exact: vision attention is
+        # block-diagonal over items via cu_seqlens, so per-chunk outputs
+        # concatenated in order equal the packed pass. Items are never split.
+        _vit_chunk_tokens = int(os.environ.get("SGLANG_VIT_CHUNK_TOKENS", "0"))
+        if (
+            _vit_chunk_tokens > 0
+            and pixel_values.shape[0] > _vit_chunk_tokens
+            and grid_thw.shape[0] > 1
+        ):
+            _tok_per_item = (grid_thw.prod(dim=1)).to(torch.long).tolist()
+            _groups = []
+            _cur, _cur_n = [], 0
+            for _i, _n in enumerate(_tok_per_item):
+                if _cur and _cur_n + _n > _vit_chunk_tokens:
+                    _groups.append(_cur)
+                    _cur, _cur_n = [], 0
+                _cur.append(_i)
+                _cur_n += _n
+            if _cur:
+                _groups.append(_cur)
+            _outs = []
+            _off = 0
+            for _g in _groups:
+                _span = sum(_tok_per_item[_j] for _j in _g)
+                _outs.append(
+                    self.visual(
+                        pixel_values[_off : _off + _span],
+                        grid_thw=grid_thw[_g],
+                    )
+                )
+                _off += _span
+            visual_features = torch.cat(_outs, dim=0)
+            del _outs
+        else:
+            visual_features = self.visual(pixel_values, grid_thw=grid_thw)
         if borrowed_items:
             self._offload_packed_visual_inputs(
                 pixel_values, borrowed_items, packed_ready
